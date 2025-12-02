@@ -15,15 +15,15 @@ class Config(object):
         self.segment_length = 1
 
         # Use this for 1 sec video features
-        self.segment_features_directory = "/data/rohith/captain_cook/features/gopro/segments_1/"
+        self.segment_features_directory = "./data/features/gopro/segments/1s/"
 
         # Use this for 2 sec multimodal features
-        self.video_features_directory = "/data/rohith/captain_cook/features/gopro/segments_2/video"
-        self.audio_features_directory = "/data/rohith/captain_cook/features/gopro/segments_2/audio"
-        self.text_features_directory = "/data/rohith/captain_cook/features/gopro/segments_2/text"
-        self.depth_features_directory = "/data/rohith/captain_cook/features/gopro/segments_2/depth"
+        self.video_features_directory = "./data/features/gopro/segments/2s/video"
+        self.audio_features_directory = "./data/features/gopro/segments/2s/audio"
+        self.text_features_directory = "./data/features/gopro/segments/2s/text"
+        self.depth_features_directory = "./data/features/gopro/segments/2s/depth"
 
-        self.ckpt_directory = "/data/rohith/captain_cook/checkpoints/"
+        self.ckpt_directory = "./checkpoints/"
         self.split = 'recordings'
         self.batch_size = 1
         self.test_batch_size = 1
@@ -74,7 +74,7 @@ class Config(object):
         parser.add_argument('--seed', type=int, default=42, help='random seed (default: 1000)')
 
         parser.add_argument('--backbone', type=str, default=const.OMNIVORE, help='backbone model')
-        parser.add_argument('--ckpt_directory', type=str, default='/data/rohith/captain_cook/checkpoints',
+        parser.add_argument('--ckpt_directory', type=str, default='./checkpoints/',
                             help='checkpoint directory')
         parser.add_argument('--split', type=str, default=const.RECORDINGS_SPLIT, help='split')
         parser.add_argument('--variant', type=str, default=const.TRANSFORMER_VARIANT, help='variant')
