@@ -82,6 +82,7 @@ class Config(object):
         parser.add_argument('--task_name', type=str, default=const.ERROR_RECOGNITION, help='task name')
         parser.add_argument("--error_category", type=str, help="error category")
         parser.add_argument('--modality', type=str, nargs='+', default=[const.VIDEO], help='audio')
+        parser.add_argument('--device', type=str, default='cuda', help='device to use (cuda or cpu)')
 
         return parser
 

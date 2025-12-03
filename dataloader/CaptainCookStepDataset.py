@@ -22,10 +22,16 @@ class CaptainCookStepDataset(Dataset):
         if isinstance(config.modality, list) and len(self._modality) > 1:
             assert self._backbone == const.IMAGEBIND, f"Invalid backbone for modality: {self._modality}"
 
-        with open('../annotations/annotation_json/step_annotations.json', 'r') as f:
+        # Use absolute path relative to project root to avoid path issues
+        import os
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        step_ann_path = os.path.join(project_root, 'annotations', 'annotation_json', 'step_annotations.json')
+        error_ann_path = os.path.join(project_root, 'annotations', 'annotation_json', 'error_annotations.json')
+        
+        with open(step_ann_path, 'r') as f:
             self._annotations = json.load(f)
 
-        with open('../annotations/annotation_json/error_annotations.json', 'r') as f:
+        with open(error_ann_path, 'r') as f:
             self._error_annotations = json.load(f)
 
         print("Loaded annotations...... ")
@@ -109,9 +115,9 @@ class CaptainCookStepDataset(Dataset):
     def _init_step_split(self, config, phase):
         self._recording_ids_file = "recordings_combined_splits.json"
         print(f"Loading recording ids from {self._recording_ids_file}")
-        # annotations_file_path = os.path.join(os.path.dirname(__file__), f'../er_annotations/{
-        # self._recording_ids_file}')
-        annotations_file_path = f"/home/rxp190007/CODE/error_recognition/er_annotations/{self._recording_ids_file}"
+        # Use dynamic path relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        annotations_file_path = os.path.join(project_root, 'er_annotations', self._recording_ids_file)
         with open(f'{annotations_file_path}', 'r') as file:
             self._recording_ids_json = json.load(file)
 
@@ -190,7 +196,9 @@ class CaptainCookStepDataset(Dataset):
 
     def _init_other_split_from_file(self, config, phase):
         self._recording_ids_file = f"{self._split}_combined_splits.json"
-        annotations_file_path = f"/home/rxp190007/CODE/error_recognition/er_annotations/{self._recording_ids_file}"
+        # Use dynamic path relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        annotations_file_path = os.path.join(project_root, 'er_annotations', self._recording_ids_file)
         print(f"Loading recording ids from {self._recording_ids_file}")
         with open(f'{annotations_file_path}', 'r') as file:
             self._recording_ids_json = json.load(file)
