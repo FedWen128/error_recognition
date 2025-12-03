@@ -129,6 +129,18 @@ ENV/
 env.bak/
 venv.bak/
 
+# Weights & Biases
+wandb/
+
+# Model checkpoints and training outputs
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# Stats and results
+stats/
+
 # Spyder project settings
 .spyderproject
 .spyproject
