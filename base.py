@@ -1,5 +1,6 @@
 import csv
 import os
+from sched import scheduler
 
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
@@ -180,8 +181,8 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
     model = fetch_model(config)
     device = config.device
     optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    #criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
+    #criterion = nn.BCEWithLogitsLoss()
     scheduler = ReduceLROnPlateau(
         optimizer, mode='max',
         factor=0.1, patience=5, verbose=True,
@@ -244,7 +245,7 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
                 train_loader.set_description(
                     f'Train Epoch: {epoch}, Progress: {batch_idx}/{num_batches}, Loss: {loss.item():.6f}'
                 )
-
+            '''
             val_losses, sub_step_metrics, step_metrics = test_er_model(model, val_loader, criterion, device, phase='val')
 
             scheduler.step(step_metrics[const.AUC])
@@ -252,6 +253,28 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
             if test_loader is not None:
                 test_losses, test_sub_step_metrics, test_step_metrics = test_er_model(model, test_loader, criterion,
                                                                                       device, phase='test')
+            '''
+
+            # Automatically search for the optimal threshold on the validation set
+            val_losses, sub_step_metrics, step_metrics, best_threshold = test_er_model(
+                model, val_loader, criterion, device,
+                phase='val',
+                search_best_threshold=True,      # Enable search
+                step_normalization=False,
+                sub_step_normalization=False
+            )
+
+            # The scheduler will continue to use AUC unchanged.
+            scheduler.step(step_metrics[const.AUC])
+
+            # Use the best threshold found on the validation set for the test set
+            if test_loader is not None:
+                test_losses, test_sub_step_metrics, test_step_metrics, _ = test_er_model(
+                model, test_loader, criterion, device,
+                phase='test',
+                threshold=best_threshold,     # Directly use the threshold selected on the validation set
+                search_best_threshold=False   # Do not re-tune the threshold on the test set
+            )
 
             avg_train_loss = sum(train_losses) / len(train_losses)
             avg_val_loss = sum(val_losses) / len(val_losses)
@@ -357,10 +380,36 @@ def train_sub_step_test_step_dataset_base(config):
 
 
 # ----------------------- TEST BASE FILES -----------------------
+def find_best_threshold(y_true, y_prob, metric="f1"):
+    """
+    y_true: 1D NumPy array, 0/1 labels
+    y_prob: 1D NumPy array, probabilities (post-sigmoid output)
+    metric: Currently using “f1” suffices
+    """
+    candidate_thresholds = np.linspace(0.05, 0.95, 19)  # 0.05, 0.10, ..., 0.95
+    best_thr = 0.5
+    best_score = -1.0
 
+    for thr in candidate_thresholds:
+        preds = (y_prob >= thr).astype(int)
+
+        if metric == "f1":
+            score = f1_score(y_true, preds, zero_division=0)
+        elif metric == "precision":
+            score = precision_score(y_true, preds, zero_division=0)
+        elif metric == "recall":
+            score = recall_score(y_true, preds, zero_division=0)
+        else:
+            raise ValueError(f"Unsupported metric: {metric}")
+
+        if score > best_score:
+            best_score = score
+            best_thr = thr
+
+    return best_thr, best_score
 
 def test_er_model(model, test_loader, criterion, device, phase, step_normalization=False, sub_step_normalization=False,
-                  threshold=0.5):
+                  threshold=0.5, search_best_threshold=False):
     total_samples = 0
     all_targets = []
     all_outputs = []
@@ -408,7 +457,7 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     sub_step_f1 = f1_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_accuracy = accuracy_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_auc = roc_auc_score(all_sub_step_targets, all_sub_step_outputs)
-    sub_step_pr_auc = binary_auprc(torch.tensor(pred_sub_step_labels), torch.tensor(all_sub_step_targets))
+    sub_step_pr_auc = binary_auprc(torch.tensor(all_sub_step_outputs), torch.tensor(all_sub_step_targets))
 
     sub_step_metrics = {
         const.PRECISION: sub_step_precision,
@@ -443,7 +492,8 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
         #     step_output = neg_output
         step_output = np.array(step_output)
         # # Scale the output to [0, 1]
-        if start - end > 1:
+        # start -end
+        if end - start > 1:
             if sub_step_normalization:
                 prob_range = np.max(step_output) - np.min(step_output)
                 step_output = (step_output - np.min(step_output)) / prob_range
@@ -456,6 +506,7 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
 
     all_step_outputs = np.array(all_step_outputs)
 
+    '''
     # # Scale the output to [0, 1]
     if step_normalization:
         prob_range = np.max(all_step_outputs) - np.min(all_step_outputs)
@@ -472,6 +523,35 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
 
     auc = roc_auc_score(all_step_targets, all_step_outputs)
     pr_auc = binary_auprc(torch.tensor(pred_step_labels), torch.tensor(all_step_targets))
+    '''
+    all_step_outputs = np.array(all_step_outputs)
+
+    # Optional: normalization
+    if step_normalization:
+        prob_range = np.max(all_step_outputs) - np.min(all_step_outputs)
+        if prob_range > 0:  # Prevent division by 0
+            all_step_outputs = (all_step_outputs - np.min(all_step_outputs)) / prob_range
+
+    all_step_targets = np.array(all_step_targets)
+
+    # -------------------- Automatically search for the optimal threshold here --------------------
+    if search_best_threshold:
+        best_thr, best_f1 = find_best_threshold(all_step_targets, all_step_outputs, metric="f1")
+        threshold = best_thr
+        print(f"[{phase}] Best threshold based on F1: {best_thr:.3f}, F1={best_f1:.4f}")
+    # -----------------------------------------------------------------
+
+    # Calculate step-level metrics using the finalised threshold
+    pred_step_labels = (all_step_outputs >= threshold).astype(int)
+
+    precision = precision_score(all_step_targets, pred_step_labels, zero_division=0)
+    recall = recall_score(all_step_targets, pred_step_labels, zero_division=0)
+    f1 = f1_score(all_step_targets, pred_step_labels, zero_division=0)
+    accuracy = accuracy_score(all_step_targets, pred_step_labels)
+
+    auc = roc_auc_score(all_step_targets, all_step_outputs)
+    pr_auc = binary_auprc(torch.tensor(all_step_outputs), torch.tensor(all_step_targets))
+    
 
     step_metrics = {
         const.PRECISION: precision,
@@ -488,4 +568,8 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     print(f"{phase} Step Level Metrics: {step_metrics}")
     print("----------------------------------------------------------------")
 
-    return test_losses, sub_step_metrics, step_metrics
+    print("pos ratio:", all_targets.mean())
+    print("prob mean/std:", all_outputs.mean(), all_outputs.std())
+    print("pred>0.5 ratio:", (all_outputs > 0.5).mean())
+
+    return test_losses, sub_step_metrics, step_metrics, threshold
