@@ -180,7 +180,7 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
     model = fetch_model(config)
     device = config.device
     optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    # criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
+    #criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
     criterion = nn.BCEWithLogitsLoss()
     scheduler = ReduceLROnPlateau(
         optimizer, mode='max',
@@ -230,6 +230,17 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
                 optimizer.step()
                 train_losses.append(loss.item())
+                
+                # FIX 4: Monitor outputs during training every 50 batches
+                if batch_idx % 50 == 0:
+                    with torch.no_grad():
+                        sigmoid_out = output.sigmoid()
+                        print(f"  Batch {batch_idx}: Loss={loss.item():.4f}, "
+                              f"Output range=[{output.min():.4f}, {output.max():.4f}], "
+                              f"Sigmoid range=[{sigmoid_out.min():.4f}, {sigmoid_out.max():.4f}], "
+                              f"Sigmoid mean={sigmoid_out.mean():.4f}, "
+                              f"Preds>0.5: {(sigmoid_out > 0.5).sum().item()}/{sigmoid_out.numel()}")
+                
                 train_loader.set_description(
                     f'Train Epoch: {epoch}, Progress: {batch_idx}/{num_batches}, Loss: {loss.item():.6f}'
                 )
