@@ -23,7 +23,7 @@ from dataloader.CaptainCookStepDataset import collate_fn, CaptainCookStepDataset
 from dataloader.CaptainCookSubStepDataset import CaptainCookSubStepDataset
 
 db_service = FirebaseService()
-
+CUSTOM_THRESHOLD = 0.15
 
 def fetch_model_name(config):
     if config.task_name == const.ERROR_CATEGORY_RECOGNITION:
@@ -82,7 +82,7 @@ def collate_stats(config, sub_step_metrics, step_metrics):
 
 
 def save_results_to_csv(config, sub_step_metrics, step_metrics, step_normalization=False, sub_step_normalization=False,
-                        threshold=0.5):
+                        threshold=CUSTOM_THRESHOLD):
     results_dir = os.path.join(os.getcwd(), const.RESULTS)
     task_results_dir = os.path.join(results_dir, config.task_name, "combined_results")
     os.makedirs(task_results_dir, exist_ok=True)
@@ -124,7 +124,7 @@ def save_results_to_firebase(config, sub_step_metrics, step_metrics):
 
 
 def save_results(config, sub_step_metrics, step_metrics, step_normalization=False, sub_step_normalization=False,
-                 threshold=0.5):
+                 threshold=CUSTOM_THRESHOLD):
     # 1. Save evaluation results to csv
     save_results_to_csv(config, sub_step_metrics, step_metrics, step_normalization, sub_step_normalization, threshold)
     # 2. Save evaluation results to firebase
@@ -180,7 +180,7 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
     model = fetch_model(config)
     device = config.device
     optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    #criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
+    #criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([5.0], dtype=torch.float32).to(device))
     criterion = nn.BCEWithLogitsLoss()
     scheduler = ReduceLROnPlateau(
         optimizer, mode='max',
@@ -239,7 +239,7 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
                               f"Output range=[{output.min():.4f}, {output.max():.4f}], "
                               f"Sigmoid range=[{sigmoid_out.min():.4f}, {sigmoid_out.max():.4f}], "
                               f"Sigmoid mean={sigmoid_out.mean():.4f}, "
-                              f"Preds>0.5: {(sigmoid_out > 0.5).sum().item()}/{sigmoid_out.numel()}")
+                              f"Preds_pos: {(sigmoid_out > CUSTOM_THRESHOLD).sum().item()}/{sigmoid_out.numel()}")
                 
                 train_loader.set_description(
                     f'Train Epoch: {epoch}, Progress: {batch_idx}/{num_batches}, Loss: {loss.item():.6f}'
@@ -360,7 +360,7 @@ def train_sub_step_test_step_dataset_base(config):
 
 
 def test_er_model(model, test_loader, criterion, device, phase, step_normalization=False, sub_step_normalization=False,
-                  threshold=0.5):
+                  threshold=CUSTOM_THRESHOLD):
     total_samples = 0
     all_targets = []
     all_outputs = []
@@ -402,7 +402,7 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     all_sub_step_outputs = all_outputs.copy()
 
     # Calculate metrics at the sub-step level
-    pred_sub_step_labels = (all_sub_step_outputs > 0.5).astype(int)
+    pred_sub_step_labels = (all_sub_step_outputs > CUSTOM_THRESHOLD).astype(int)
     sub_step_precision = precision_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_recall = recall_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_f1 = f1_score(all_sub_step_targets, pred_sub_step_labels)
