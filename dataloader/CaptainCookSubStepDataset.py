@@ -23,7 +23,7 @@ class CaptainCookSubStepDataset(Dataset):
 
         self._recording_ids_file = f"{self._split}_data_split_combined.json"
 
-        with open(f'../annotations/data_splits/{self._recording_ids_file}', 'r') as file:
+        with open(f'annotations/data_splits/{self._recording_ids_file}', 'r') as file:
             self._recording_ids_json = json.load(file)
 
         if self._phase == 'train':
@@ -31,7 +31,7 @@ class CaptainCookSubStepDataset(Dataset):
         else:
             self._recording_ids = self._recording_ids_json[self._phase]
 
-        with open('../annotations/annotation_json/step_annotations.json', 'r') as f:
+        with open('annotations/annotation_json/step_annotations.json', 'r') as f:
             self._annotations = json.load(f)
 
         sub_step_id = 0

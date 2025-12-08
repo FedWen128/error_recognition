@@ -16,29 +16,17 @@ class CaptainCookStepDataset(Dataset):
         self._phase = phase
         self._split = split
 
-        # Shall be activated only for IMAGEBIND
-        # Modality is a list [Depth, Audio, Text, Video]
         self._modality = config.modality
-        if isinstance(config.modality, list) and len(self._modality) > 1:
-            assert self._backbone == const.IMAGEBIND, f"Invalid backbone for modality: {self._modality}"
 
-        # Use absolute path relative to project root to avoid path issues
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        step_ann_path = os.path.join(project_root, 'annotations', 'annotation_json', 'step_annotations.json')
-        error_ann_path = os.path.join(project_root, 'annotations', 'annotation_json', 'error_annotations.json')
-        
-        with open(step_ann_path, 'r') as f:
+        with open('annotations/annotation_json/step_annotations.json', 'r') as f:
             self._annotations = json.load(f)
 
-        with open(error_ann_path, 'r') as f:
+        with open('annotations/annotation_json/error_annotations.json', 'r') as f:
             self._error_annotations = json.load(f)
 
         print("Loaded annotations...... ")
 
         assert self._phase in ["train", "val", "test"], f"Invalid phase: {self._phase}"
-
-        self._features_directory = self._config.video_features_directory
 
         self._build_error_category_label_name_map()
         self._build_error_category_labels()
@@ -100,24 +88,16 @@ class CaptainCookStepDataset(Dataset):
             if recording_step_dictionary.get(step_id) is None:
                 recording_step_dictionary[step_id] = []
 
-            # We consider 2 seconds features extracted using ImageBind
-            # Whereas we consider 1 second features extracted from other backbones
-            if self._backbone == const.IMAGEBIND:
-                recording_step_dictionary[step_id].append(
-                    (math.floor(step_start_time / 2), math.ceil(step_end_time / 2), step['has_errors'],
-                     error_category_labels))
-            else:
-                recording_step_dictionary[step_id].append(
-                    (math.floor(step_start_time), math.ceil(step_end_time), step['has_errors'],
-                     error_category_labels))
+            recording_step_dictionary[step_id].append(
+                (math.floor(step_start_time), math.ceil(step_end_time), step['has_errors'], error_category_labels))
         return recording_step_dictionary
 
     def _init_step_split(self, config, phase):
         self._recording_ids_file = "recordings_combined_splits.json"
         print(f"Loading recording ids from {self._recording_ids_file}")
-        # Use dynamic path relative to project root
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        annotations_file_path = os.path.join(project_root, 'er_annotations', self._recording_ids_file)
+        # annotations_file_path = os.path.join(os.path.dirname(__file__), f'../er_annotations/{
+        # self._recording_ids_file}')
+        annotations_file_path = f"./er_annotations/{self._recording_ids_file}"
         with open(f'{annotations_file_path}', 'r') as file:
             self._recording_ids_json = json.load(file)
 
@@ -127,9 +107,6 @@ class CaptainCookStepDataset(Dataset):
         self._step_dict = {}
         step_index_id = 0
         for recording_id in self._recording_ids:
-            if recording_id == '12_6' and self._backbone == const.IMAGEBIND:
-                # Skip this recording as it has no features
-                continue
             self._normal_step_dict = {}
             self._error_step_dict = {}
             normal_index_id = 0
@@ -196,9 +173,7 @@ class CaptainCookStepDataset(Dataset):
 
     def _init_other_split_from_file(self, config, phase):
         self._recording_ids_file = f"{self._split}_combined_splits.json"
-        # Use dynamic path relative to project root
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        annotations_file_path = os.path.join(project_root, 'er_annotations', self._recording_ids_file)
+        annotations_file_path = f"./er_annotations/{self._recording_ids_file}"
         print(f"Loading recording ids from {self._recording_ids_file}")
         with open(f'{annotations_file_path}', 'r') as file:
             self._recording_ids_json = json.load(file)
@@ -207,9 +182,6 @@ class CaptainCookStepDataset(Dataset):
         self._step_dict = {}
         index_id = 0
         for recording_id in self._recording_ids:
-            if recording_id == '12_6' and self._backbone == const.IMAGEBIND:
-                # Skip this recording as it has no features
-                continue
             # 1. Prepare step_id, list(<start, end>) for the recording_id
             recording_step_dictionary = self._prepare_recording_step_dictionary(recording_id)
 
@@ -270,90 +242,14 @@ class CaptainCookStepDataset(Dataset):
 
         return step_features, step_labels
 
-    @staticmethod
-    # Filename should be AUDIO: {recording_id}.wav.npz, VIDEO: {recording_id}_360p.mp4.npz
-    def fetch_imagebind_data(data, filename):
-        numpy_data = np.frombuffer(data[f"{filename}"], dtype=np.float32).reshape((-1, 1024))
-        return numpy_data
-
     def _get_video_features(self, recording_id, step_start_end_list):
-        if self._backbone == const.IMAGEBIND:
-            recording_name = f"{recording_id}_360p.mp4"
-            features_path = os.path.join(self._config.video_features_directory, f'{recording_name}.npz')
-            features_data = np.load(features_path)
-            recording_features = self.fetch_imagebind_data(features_data, "video_embeddings")
-        else:
-            features_path = os.path.join(self._config.segment_features_directory, "video", self._backbone,
+        features_path = os.path.join(self._config.segment_features_directory, "video", self._backbone,
                                          f'{recording_id}_360p.mp4_1s_1s.npz')
-            features_data = np.load(features_path)
-            recording_features = features_data['arr_0']
-
-        step_features, step_labels = self._build_modality_step_features_labels(recording_features, step_start_end_list)
-        features_data.close()
-        return step_features, step_labels
-
-    def _get_audio_features(self, recording_id, step_start_end_list):
-        recording_name = f"{recording_id}.wav"
-        features_path = os.path.join(self._config.audio_features_directory, f'{recording_name}.npz')
         features_data = np.load(features_path)
-        recording_features = self.fetch_imagebind_data(features_data, "video_embeddings")
+        recording_features = features_data['arr_0']
+
         step_features, step_labels = self._build_modality_step_features_labels(recording_features, step_start_end_list)
         features_data.close()
-        return step_features, step_labels
-
-    def _get_depth_features(self, recording_id, step_start_end_list):
-        features_path = os.path.join(self._config.depth_features_directory, f'{recording_id}.npz')
-        features_data = np.load(features_path)
-        recording_features = self.fetch_imagebind_data(features_data, "video_embeddings")
-        step_features, step_labels = self._build_modality_step_features_labels(recording_features, step_start_end_list)
-        features_data.close()
-        return step_features, step_labels
-
-    def _get_text_features(self, recording_id, step_start_end_list):
-        features_path = os.path.join(self._config.text_features_directory, f'{recording_id}_360p.npz')
-        features_data = np.load(features_path)
-        recording_features = self.fetch_imagebind_data(features_data, "video_embeddings")
-        step_features, step_labels = self._build_modality_step_features_labels(recording_features, step_start_end_list)
-        features_data.close()
-        return step_features, step_labels
-
-    def _get_imagebind_features(self, recording_id, step_start_end_list):
-        step_features = []
-        step_labels = []
-
-        # Load video features
-        if const.VIDEO in self._modality:
-            video_step_features, video_step_labels = self._get_video_features(recording_id, step_start_end_list)
-            step_features.append(video_step_features)
-            if len(step_labels) == 0:
-                step_labels = video_step_labels
-
-        # Load audio features
-        if const.AUDIO in self._modality:
-            audio_step_features, audio_step_labels = self._get_audio_features(recording_id, step_start_end_list)
-            step_features.append(audio_step_features)
-            if len(step_labels) == 0:
-                step_labels = audio_step_labels
-
-        # Load text features
-        if const.TEXT in self._modality:
-            text_step_features, text_step_labels = self._get_text_features(recording_id, step_start_end_list)
-            step_features.append(text_step_features)
-            if len(step_labels) == 0:
-                step_labels = text_step_labels
-
-        # Load depth features
-        if const.DEPTH in self._modality:
-            depth_step_features, depth_step_labels = self._get_depth_features(recording_id, step_start_end_list)
-            step_features.append(depth_step_features)
-            if len(step_labels) == 0:
-                step_labels = depth_step_labels
-
-        if len(step_features) > 1:
-            step_features = torch.cat(step_features, dim=-1)
-        else:
-            step_features = step_features[0]
-
         return step_features, step_labels
 
     def __getitem__(self, idx):
@@ -362,10 +258,9 @@ class CaptainCookStepDataset(Dataset):
 
         step_features = None
         step_labels = None
-        if self._backbone == const.IMAGEBIND:
-            step_features, step_labels = self._get_imagebind_features(recording_id, step_start_end_list)
-        elif self._backbone in [const.OMNIVORE, const.RESNET3D, const.X3D, const.SLOWFAST]:
-            step_features, step_labels = self._get_video_features(recording_id, step_start_end_list)
+        
+        assert self._backbone in [const.OMNIVORE, const.SLOWFAST], "Only Omnivore and SlowFast are supported with this codebase"
+        step_features, step_labels = self._get_video_features(recording_id, step_start_end_list)
 
         assert step_features is not None, f"Features not found for recording_id: {recording_id}"
         assert step_labels is not None, f"Labels not found for recording_id: {recording_id}"
