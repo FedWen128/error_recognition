@@ -1,6 +1,5 @@
 import csv
 import os
-from sched import scheduler
 
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
 
@@ -8,8 +7,6 @@ import wandb
 from torch import optim, nn
 from torch.utils.data import DataLoader
 
-from analysis.results.FirebaseService import FirebaseService
-from analysis.results.Result import Metrics, ResultDetails, Result
 from constants import Constants as const
 import numpy as np
 import torch
@@ -19,11 +16,8 @@ from tqdm import tqdm
 
 from core.models.blocks import fetch_input_dim, MLP
 from core.models.er_former import ErFormer
-from core.models.lstm_model import LSTMModel
 from dataloader.CaptainCookStepDataset import collate_fn, CaptainCookStepDataset
 from dataloader.CaptainCookSubStepDataset import CaptainCookSubStepDataset
-
-db_service = FirebaseService()
 
 
 def fetch_model_name(config):
@@ -32,7 +26,7 @@ def fetch_model_name(config):
     elif config.task_name in  [const.EARLY_ERROR_RECOGNITION, const.ERROR_RECOGNITION]:
         if config.model_name is None:
             if config.backbone in [const.RESNET3D, const.X3D, const.SLOWFAST, const.OMNIVORE]:
-                config.model_name = f"{config.task_name}_{config.split}_{config.backbone}_{config.variant}_{config.modality}"
+                config.model_name = f"{config.task_name}_{config.split}_{config.backbone}_{config.variant}_{config.modality[0]}"
             elif config.backbone == const.IMAGEBIND:
                 combined_modality_name = '_'.join(config.modality)
                 config.model_name = f"{config.task_name}_{config.split}_{config.backbone}_{config.variant}_{combined_modality_name}"
@@ -56,9 +50,6 @@ def fetch_model(config):
     elif config.variant == const.TRANSFORMER_VARIANT:
         if config.backbone in [const.OMNIVORE, const.RESNET3D, const.X3D, const.SLOWFAST, const.IMAGEBIND]:
             model = ErFormer(config)
-    elif config.variant == const.LSTM_VARIANT:
-        if config.backbone in [const.OMNIVORE, const.RESNET3D, const.X3D, const.SLOWFAST, const.IMAGEBIND]:
-            model = LSTMModel(config, hidden_size=256, num_layers=2, dropout=0.3)
 
     assert model is not None, f"Model not found for variant: {config.variant} and backbone: {config.backbone}"
     model.to(config.device)
@@ -107,29 +98,10 @@ def save_results_to_csv(config, sub_step_metrics, step_metrics, step_normalizati
         writer.writerow(collated_stats)
 
 
-def save_results_to_firebase(config, sub_step_metrics, step_metrics):
-    sub_step_metrics = Metrics.from_dict(sub_step_metrics)
-    step_metrics = Metrics.from_dict(step_metrics)
-    result_details = ResultDetails(sub_step_metrics, step_metrics)
-    result = Result(
-        task_name=config.task_name,
-        variant=config.variant,
-        backbone=config.backbone,
-        split=config.split,
-        model_name=config.model_name,
-        modality=config.modality
-    )
-
-    result.add_result_details(result_details)
-    db_service.update_result(result.result_id, result.to_dict())
-
-
 def save_results(config, sub_step_metrics, step_metrics, step_normalization=False, sub_step_normalization=False,
                  threshold=0.5):
     # 1. Save evaluation results to csv
     save_results_to_csv(config, sub_step_metrics, step_metrics, step_normalization, sub_step_normalization, threshold)
-    # 2. Save evaluation results to firebase
-    # save_results_to_firebase(config, sub_step_metrics, step_metrics)
 
 
 def store_model(model, config, ckpt_name: str):
@@ -182,7 +154,6 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
     device = config.device
     optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([2.5], dtype=torch.float32).to(device))
-    #criterion = nn.BCEWithLogitsLoss()
     scheduler = ReduceLROnPlateau(
         optimizer, mode='max',
         factor=0.1, patience=5, verbose=True,
@@ -231,21 +202,10 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
                 optimizer.step()
                 train_losses.append(loss.item())
-                
-                # FIX 4: Monitor outputs during training every 50 batches
-                if batch_idx % 50 == 0:
-                    with torch.no_grad():
-                        sigmoid_out = output.sigmoid()
-                        print(f"  Batch {batch_idx}: Loss={loss.item():.4f}, "
-                              f"Output range=[{output.min():.4f}, {output.max():.4f}], "
-                              f"Sigmoid range=[{sigmoid_out.min():.4f}, {sigmoid_out.max():.4f}], "
-                              f"Sigmoid mean={sigmoid_out.mean():.4f}, "
-                              f"Preds>0.5: {(sigmoid_out > 0.5).sum().item()}/{sigmoid_out.numel()}")
-                
                 train_loader.set_description(
                     f'Train Epoch: {epoch}, Progress: {batch_idx}/{num_batches}, Loss: {loss.item():.6f}'
                 )
-            '''
+
             val_losses, sub_step_metrics, step_metrics = test_er_model(model, val_loader, criterion, device, phase='val')
 
             scheduler.step(step_metrics[const.AUC])
@@ -253,28 +213,6 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
             if test_loader is not None:
                 test_losses, test_sub_step_metrics, test_step_metrics = test_er_model(model, test_loader, criterion,
                                                                                       device, phase='test')
-            '''
-
-            # Automatically search for the optimal threshold on the validation set
-            val_losses, sub_step_metrics, step_metrics, best_threshold = test_er_model(
-                model, val_loader, criterion, device,
-                phase='val',
-                search_best_threshold=True,      # Enable search
-                step_normalization=False,
-                sub_step_normalization=False
-            )
-
-            # The scheduler will continue to use AUC unchanged.
-            scheduler.step(step_metrics[const.AUC])
-
-            # Use the best threshold found on the validation set for the test set
-            if test_loader is not None:
-                test_losses, test_sub_step_metrics, test_step_metrics, _ = test_er_model(
-                model, test_loader, criterion, device,
-                phase='test',
-                threshold=best_threshold,     # Directly use the threshold selected on the validation set
-                search_best_threshold=False   # Do not re-tune the threshold on the test set
-            )
 
             avg_train_loss = sum(train_losses) / len(train_losses)
             avg_val_loss = sum(val_losses) / len(val_losses)
@@ -330,7 +268,7 @@ def train_step_test_step_dataset_base(config):
         "num_workers": 8,
         "pin_memory": False,
     }
-    train_kwargs = {**cuda_kwargs, "shuffle": True, "batch_size": 1}
+    train_kwargs = {**cuda_kwargs, "shuffle": True, "batch_size": config.batch_size}
     test_kwargs = {**cuda_kwargs, "shuffle": False, "batch_size": 1}
 
     print("-------------------------------------------------------------")
@@ -380,36 +318,10 @@ def train_sub_step_test_step_dataset_base(config):
 
 
 # ----------------------- TEST BASE FILES -----------------------
-def find_best_threshold(y_true, y_prob, metric="f1"):
-    """
-    y_true: 1D NumPy array, 0/1 labels
-    y_prob: 1D NumPy array, probabilities (post-sigmoid output)
-    metric: Currently using “f1” suffices
-    """
-    candidate_thresholds = np.linspace(0.05, 0.95, 19)  # 0.05, 0.10, ..., 0.95
-    best_thr = 0.5
-    best_score = -1.0
 
-    for thr in candidate_thresholds:
-        preds = (y_prob >= thr).astype(int)
 
-        if metric == "f1":
-            score = f1_score(y_true, preds, zero_division=0)
-        elif metric == "precision":
-            score = precision_score(y_true, preds, zero_division=0)
-        elif metric == "recall":
-            score = recall_score(y_true, preds, zero_division=0)
-        else:
-            raise ValueError(f"Unsupported metric: {metric}")
-
-        if score > best_score:
-            best_score = score
-            best_thr = thr
-
-    return best_thr, best_score
-
-def test_er_model(model, test_loader, criterion, device, phase, step_normalization=False, sub_step_normalization=False,
-                  threshold=0.5, search_best_threshold=False):
+def test_er_model(model, test_loader, criterion, device, phase, step_normalization=True, sub_step_normalization=True,
+                  threshold=0.6):
     total_samples = 0
     all_targets = []
     all_outputs = []
@@ -457,7 +369,7 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     sub_step_f1 = f1_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_accuracy = accuracy_score(all_sub_step_targets, pred_sub_step_labels)
     sub_step_auc = roc_auc_score(all_sub_step_targets, all_sub_step_outputs)
-    sub_step_pr_auc = binary_auprc(torch.tensor(all_sub_step_outputs), torch.tensor(all_sub_step_targets))
+    sub_step_pr_auc = binary_auprc(torch.tensor(pred_sub_step_labels), torch.tensor(all_sub_step_targets))
 
     sub_step_metrics = {
         const.PRECISION: sub_step_precision,
@@ -492,8 +404,7 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
         #     step_output = neg_output
         step_output = np.array(step_output)
         # # Scale the output to [0, 1]
-        # start -end
-        if end - start > 1:
+        if start - end > 1:
             if sub_step_normalization:
                 prob_range = np.max(step_output) - np.min(step_output)
                 step_output = (step_output - np.min(step_output)) / prob_range
@@ -506,7 +417,6 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
 
     all_step_outputs = np.array(all_step_outputs)
 
-    '''
     # # Scale the output to [0, 1]
     if step_normalization:
         prob_range = np.max(all_step_outputs) - np.min(all_step_outputs)
@@ -523,35 +433,6 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
 
     auc = roc_auc_score(all_step_targets, all_step_outputs)
     pr_auc = binary_auprc(torch.tensor(pred_step_labels), torch.tensor(all_step_targets))
-    '''
-    all_step_outputs = np.array(all_step_outputs)
-
-    # Optional: normalization
-    if step_normalization:
-        prob_range = np.max(all_step_outputs) - np.min(all_step_outputs)
-        if prob_range > 0:  # Prevent division by 0
-            all_step_outputs = (all_step_outputs - np.min(all_step_outputs)) / prob_range
-
-    all_step_targets = np.array(all_step_targets)
-
-    # -------------------- Automatically search for the optimal threshold here --------------------
-    if search_best_threshold:
-        best_thr, best_f1 = find_best_threshold(all_step_targets, all_step_outputs, metric="f1")
-        threshold = best_thr
-        print(f"[{phase}] Best threshold based on F1: {best_thr:.3f}, F1={best_f1:.4f}")
-    # -----------------------------------------------------------------
-
-    # Calculate step-level metrics using the finalised threshold
-    pred_step_labels = (all_step_outputs >= threshold).astype(int)
-
-    precision = precision_score(all_step_targets, pred_step_labels, zero_division=0)
-    recall = recall_score(all_step_targets, pred_step_labels, zero_division=0)
-    f1 = f1_score(all_step_targets, pred_step_labels, zero_division=0)
-    accuracy = accuracy_score(all_step_targets, pred_step_labels)
-
-    auc = roc_auc_score(all_step_targets, all_step_outputs)
-    pr_auc = binary_auprc(torch.tensor(all_step_outputs), torch.tensor(all_step_targets))
-    
 
     step_metrics = {
         const.PRECISION: precision,
@@ -568,10 +449,4 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     print(f"{phase} Step Level Metrics: {step_metrics}")
     print("----------------------------------------------------------------")
 
-    print("pos ratio:", all_targets.mean())
-    print("prob mean/std:", all_outputs.mean(), all_outputs.std())
-    print("pred>0.5 ratio:", (all_outputs > 0.5).mean())
-
-    #return test_losses, sub_step_metrics, step_metrics
-    return test_losses, sub_step_metrics, step_metrics, threshold
-    
+    return test_losses, sub_step_metrics, step_metrics
