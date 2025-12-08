@@ -572,4 +572,6 @@ def test_er_model(model, test_loader, criterion, device, phase, step_normalizati
     print("prob mean/std:", all_outputs.mean(), all_outputs.std())
     print("pred>0.5 ratio:", (all_outputs > 0.5).mean())
 
+    #return test_losses, sub_step_metrics, step_metrics
     return test_losses, sub_step_metrics, step_metrics, threshold
+    
