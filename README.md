@@ -1,36 +1,39 @@
-# Error Recognition
+# AML/DAAI 2025 - Mistake Detection Project
 
-Please download or extract features for the data following the instructions in the [Feature Extraction](https://github.com/CaptainCook4D/feature_extractors) repository.
+## Environment Setup
 
-Once you have the features, you can run the code in this repository to train the models.
+First of all, create a python environment with 
 
-We have code three tasks: 
+```
+python -m venv .venv
+pip install -r requirements.txt
+```
 
-1. Error Recognition
-   - Multimodal Data 
-     - Video
-     - Audio
-     - Text
-     - Depth
-2. Early Error Recognition
-   - Video Data
+Then, download the pre-extracted features for 1s segments and put them in the `data/features` directory.
 
+## Step 1: Baselines reproduction
+Download the official best checkpoints from [here](https://utdallas.app.box.com/s/uz3s1alrzucz03sleify8kazhuc1ksl3) (`error_recognition_best` directory) and place them in the `checkpoints`. Then run the evaluation for the error recognition task.
 
-## How to run the code
+**Example command**:
+```
+python -m core.evaluate --variant MLP --backbone omnivore --ckpt checkpoints/error_recognition_best/MLP/omnivore/error_recognition_MLP_omnivore_step_epoch_43.pt --split step --threshold 0.6
+```
 
-1. Download or extract features for the data. 
-2. Place the features in the respective folders.
-3. Change the paths in the /core/config.py file.
-4. Copy the respective script from scripts folder to the root directory.
-5. Run the script.
+You should be able to reproduce results close to those reported in the paper (Table 2):
 
-## How to evaluate the models
+| Split | Model | F1 | AUC |
+|-------|-------|----|-----|
+| Step | MLP (Omnivore) | 24.26 | 75.74 |
+| Recordings | MLP (Omnivore) | 55.42 | 63.03 |
+| Step | Transf. (Omnivore) | 55.39 | 75.62 |
+| Recordings | Transf. (Omnivore) | 40.73 | 62.27 |
 
-Our reported results correspond to the following threshold values:
+**NOTE**: Use the thresholds indicated in the official README.md of project (0.6 for step and 0.4 for recordings steps).
 
-1. Step Split: 0.6
-2. Recordings Split: 0.4
+## Acknowledgements
 
-Note the best epoch of the trained models and add it accordingly to the /core/evaluate.py file.
+This project builds on many repositories from the CaptainCook4D release. Please refer to the original codebases for more details.
 
-Use it to get the evaluation csvs for different thresholds.
+**Error Recognition**: https://github.com/CaptainCook4D/error_recognition
+
+**Features Extraction**: https://github.com/CaptainCook4D/feature_extractors
