@@ -17,6 +17,7 @@ parser.add_argument('--device', type=str, default='cuda',
 parser.add_argument('--weight_decay', type=float, default=1e-3,
                    help='Weight decay for optimizer')
 parser.add_argument('--variant', type=str, default="MLP", help='variant')
+parser.add_argument('--num_epochs', type=str, default=10, help='num_epochs')
 
 args, unknown = parser.parse_known_args()
 
@@ -35,6 +36,8 @@ from base import fetch_model, train_step_test_step_dataset_base, test_er_model, 
 from core.config import Config
 from constants import Constants as const
 
+MAX_NORM = 10.0
+#CUSTOM_BIAS = 0
 
 class LearningRateFinder:
     def __init__(self, model, optimizer, criterion, device):
@@ -130,7 +133,8 @@ class LearningRateFinder:
             
             # Backward pass
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            # CHANGE: Match max_norm=20.0 from base.py
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=MAX_NORM)
             self.optimizer.step()
             
             # Update learning rate
@@ -224,8 +228,18 @@ def grid_search_lr(config, lr_values, num_epochs=5):
         
         # Create model and optimizer
         model = fetch_model(config)
+
+        """ # CHANGE: Add bias initialization to match base.py
+        last_linear = None
+        for m in model.modules():
+            if isinstance(m, torch.nn.Linear):
+                last_linear = m
+        if last_linear is not None:
+            print("Initializing last layer bias to 2.0 to force initial positive predictions.")
+            torch.nn.init.constant_(last_linear.bias, CUSTOM_BIAS) """
+
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=config.weight_decay)
-        criterion = torch.nn.BCEWithLogitsLoss()
+        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.5], dtype=torch.float32).to(device))
         
         best_val_loss = float('inf')
         best_val_auc = 0
@@ -248,7 +262,8 @@ def grid_search_lr(config, lr_values, num_epochs=5):
                     break
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                # CHANGE: Match max_norm=20.0 from base.py
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=MAX_NORM)
                 optimizer.step()
                 
                 train_losses.append(loss.item())
@@ -306,17 +321,19 @@ def grid_search_lr(config, lr_values, num_epochs=5):
     return results
 
 
-def main_lr_finder(device='cuda', weight_decay=1e-3, variant='MLP'):
+def main_lr_finder(device='cuda', weight_decay=1e-3, variant='MLP', num_epochs=10):
     """Run learning rate finder (fast method)"""
     print("Starting Learning Rate Finder (Range Test Method)...")
     print(f"Using Device: {device}")
     print(f"Using Weight Decay: {weight_decay}")
     print(f"Using Variant: {variant}")
+    print(f"Using Num Epochs: {num_epochs}")
     print(f"Using Custom Threshold: {CUSTOM_THRESHOLD}")
     
     # Create Config with device and variant arguments injected
     original_argv = sys.argv.copy()
-    sys.argv = [sys.argv[0], '--device', device, '--weight_decay', str(weight_decay), '--variant', variant]
+    sys.argv = [sys.argv[0], '--device', device, '--weight_decay', str(weight_decay),
+                '--variant', variant, '--num_epochs', num_epochs]
     
     conf = Config()
     
@@ -329,10 +346,12 @@ def main_lr_finder(device='cuda', weight_decay=1e-3, variant='MLP'):
     conf.device = device
     conf.weight_decay = weight_decay
     conf.variant = variant
+    conf.num_epochs = num_epochs
     
     print(f"Config.device: {conf.device}")
     print(f"Config.weight_decay: {conf.weight_decay}")
     print(f"Config.variant: {conf.variant}")
+    print(f"Config.num_epochs: {conf.num_epochs}")
     
     # Get data loaders
     train_loader, val_loader, test_loader = train_step_test_step_dataset_base(conf)
@@ -340,12 +359,21 @@ def main_lr_finder(device='cuda', weight_decay=1e-3, variant='MLP'):
     # Create model
     model = fetch_model(conf)
     
+    """ # CHANGE: Add bias initialization to match base.py
+    last_linear = None
+    for m in model.modules():
+        if isinstance(m, torch.nn.Linear):
+            last_linear = m
+    if last_linear is not None:
+        print("Initializing last layer bias to 2.0 to force initial positive predictions.")
+        torch.nn.init.constant_(last_linear.bias, CUSTOM_BIAS) """
+
     # Verify model device
     actual_device = next(model.parameters()).device
     print(f"Model is on device: {actual_device}")
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-7, weight_decay=conf.weight_decay)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.5], dtype=torch.float32).to(device))
     
     # Create LR Finder
     lr_finder = LearningRateFinder(model, optimizer, criterion, str(device))
@@ -365,17 +393,19 @@ def main_lr_finder(device='cuda', weight_decay=1e-3, variant='MLP'):
     lr_finder.plot(skip_start=10, skip_end=5, suggest=True)
 
 
-def main_grid_search(device='cuda', weight_decay=1e-3, variant='MLP'):
+def main_grid_search(device='cuda', weight_decay=1e-3, variant='MLP', num_epochs=10):
     """Run grid search over learning rates (slower but more accurate)"""
     print("Starting Learning Rate Grid Search...")
     print(f"Using Device: {device}")
     print(f"Using Weight Decay: {weight_decay}")
     print(f"Using Variant: {variant}")
+    print(f"Using Num Epochs: {num_epochs}")
     print(f"Using Custom Threshold: {CUSTOM_THRESHOLD}")
     
     # Create Config with device and variant arguments injected
     original_argv = sys.argv.copy()
-    sys.argv = [sys.argv[0], '--device', device, '--weight_decay', str(weight_decay), '--variant', variant]
+    sys.argv = [sys.argv[0], '--device', device, '--weight_decay', str(weight_decay),
+                '--variant', variant, '--num_epochs', num_epochs]
     
     conf = Config()
     
@@ -388,22 +418,24 @@ def main_grid_search(device='cuda', weight_decay=1e-3, variant='MLP'):
     conf.device = device
     conf.weight_decay = weight_decay
     conf.variant = variant
+    conf.num_epochs = num_epochs
     
     print(f"Config.device: {conf.device}")
     print(f"Config.weight_decay: {conf.weight_decay}")
     print(f"Config.variant: {conf.variant}")
+    print(f"Config.num_epochs: {conf.num_epochs}")
     
     # Define learning rates to test
     lr_values = [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2]
     
     # Run grid search
-    results = grid_search_lr(conf, lr_values, num_epochs=5)
+    results = grid_search_lr(conf, lr_values, num_epochs=int(num_epochs))
     
     return results
 
 
 if __name__ == "__main__":
     if args.method == 'finder':
-        main_lr_finder(device=args.device, weight_decay=args.weight_decay, variant=args.variant)
+        main_lr_finder(device=args.device, weight_decay=args.weight_decay, variant=args.variant, num_epochs=args.num_epochs)
     else:
-        main_grid_search(device=args.device, weight_decay=args.weight_decay, variant=args.variant)
+        main_grid_search(device=args.device, weight_decay=args.weight_decay, variant=args.variant, num_epochs=args.num_epochs)

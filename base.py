@@ -23,7 +23,8 @@ from dataloader.CaptainCookStepDataset import collate_fn, CaptainCookStepDataset
 from dataloader.CaptainCookSubStepDataset import CaptainCookSubStepDataset
 
 db_service = FirebaseService()
-CUSTOM_THRESHOLD = 0.15
+CUSTOM_THRESHOLD = 0.5
+MAX_NORM =10.0
 
 def fetch_model_name(config):
     if config.task_name == const.ERROR_CATEGORY_RECOGNITION:
@@ -166,7 +167,7 @@ def train_epoch(model, device, train_loader, optimizer, epoch, criterion):
         assert not torch.isnan(loss).any(), "Loss contains NaN values"
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=MAX_NORM)  # Gradient clipping
         optimizer.step()
         train_losses.append(loss.item())
         train_loader.set_description(
@@ -178,10 +179,21 @@ def train_epoch(model, device, train_loader, optimizer, epoch, criterion):
 
 def train_model_base(train_loader, val_loader, config, test_loader=None):
     model = fetch_model(config)
+
+    """ # CHANGE 1: Force the model to start by predicting positives.
+    # We find the last Linear layer and set its bias to 2.0 (approx 0.88 probability).
+    last_linear = None
+    for m in model.modules():
+        if isinstance(m, nn.Linear):
+            last_linear = m
+    if last_linear is not None:
+        print("Initializing last layer bias to 2.0 to force initial positive predictions.")
+        nn.init.constant_(last_linear.bias, 2.0) """
+
     device = config.device
     optimizer = optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    #criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([5.0], dtype=torch.float32).to(device))
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.5], dtype=torch.float32).to(device))
+    #criterion = nn.BCEWithLogitsLoss()
     scheduler = ReduceLROnPlateau(
         optimizer, mode='max',
         factor=0.1, patience=5, verbose=True,
@@ -227,7 +239,12 @@ def train_model_base(train_loader, val_loader, config, test_loader=None):
                 # assert not torch.isnan(loss).any(), "Loss contains NaN values"
 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+                
+                # CHANGE 2: Relax gradient clipping.
+                # With high pos_weight, gradients are huge. Clipping to 1.0 kills the update.
+                # Increase this significantly (e.g., to 10.0 or 50.0) to allow the weights to move.
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=MAX_NORM)
+                
                 optimizer.step()
                 train_losses.append(loss.item())
                 
@@ -336,7 +353,7 @@ def train_sub_step_test_step_dataset_base(config):
         "num_workers": 1,
         "pin_memory": False,
     }
-    train_kwargs = {**cuda_kwargs, "shuffle": True, "batch_size": 1024}
+    train_kwargs = {**cuda_kwargs, "shuffle": True, "batch_size": 512}
     test_kwargs = {**cuda_kwargs, "shuffle": False, "batch_size": 1}
 
     train_dataset = CaptainCookSubStepDataset(config, const.TRAIN, config.split)
@@ -361,6 +378,9 @@ def train_sub_step_test_step_dataset_base(config):
 
 def test_er_model(model, test_loader, criterion, device, phase, step_normalization=False, sub_step_normalization=False,
                   threshold=CUSTOM_THRESHOLD):
+    # CHANGE: Switch to evaluation mode to disable Dropout and BatchNorm updates
+    model.eval()
+    
     total_samples = 0
     all_targets = []
     all_outputs = []
